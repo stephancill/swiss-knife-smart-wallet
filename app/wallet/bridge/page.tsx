@@ -15,15 +15,34 @@ import {
   Stack,
   Button,
   Center,
+  FormControl,
+  FormLabel,
+  Input,
+  NumberInput,
+  NumberInputField,
+  NumberInputStepper,
+  NumberIncrementStepper,
+  NumberDecrementStepper,
+  FormHelperText,
+  useColorModeValue,
+  Textarea,
 } from "@chakra-ui/react";
 import { Global } from "@emotion/react";
 import frameSdk, { Context } from "@farcaster/frame-sdk";
-import { useAccount, useWalletClient, useChainId, useSwitchChain } from "wagmi";
+import {
+  useAccount,
+  useWalletClient,
+  useChainId,
+  useSwitchChain,
+  useConnect,
+} from "wagmi";
 import { base } from "viem/chains";
+import { mnemonicToAccount } from "viem/accounts";
+import { bytesToHex } from "viem";
 import { buildApprovedNamespaces } from "@walletconnect/utils";
-import { ConnectButton } from "@/components/ConnectButton/ConnectButton";
 import { walletChains } from "@/app/providers";
 import { chainIdToChain } from "@/data/common";
+import { headlessCSWConnector } from "../headless-csw-connector";
 
 // Import types
 import { SessionProposal, SessionRequest, WalletKitInstance } from "./types";
@@ -46,6 +65,7 @@ export default function WalletBridgePage() {
   const { data: walletClient } = useWalletClient();
   const chainId = useChainId();
   const { switchChainAsync } = useSwitchChain();
+  const { connect } = useConnect();
 
   // State for Frame
   const [isFrameSDKLoaded, setIsFrameSDKLoaded] = useState(false);
@@ -93,6 +113,142 @@ export default function WalletBridgePage() {
   const [needsChainSwitch, setNeedsChainSwitch] = useState<boolean>(false);
   const [targetChainId, setTargetChainId] = useState<number | null>(null);
 
+  // State for HeadlessCSW form
+  const [cswAddress, setCswAddress] = useState<string>("");
+  const [recoveryPhrase, setRecoveryPhrase] = useState<string>("");
+  const [ownerIndex, setOwnerIndex] = useState<number>(0);
+  const [isConnecting, setIsConnecting] = useState<boolean>(false);
+
+  // HeadlessCSW Form Component
+  const HeadlessCSWForm = () => {
+    const formBg = useColorModeValue("gray.50", "gray.700");
+    const borderColor = useColorModeValue("gray.200", "gray.600");
+
+    const handleConnect = async () => {
+      if (!cswAddress || !recoveryPhrase) {
+        toast({
+          title: "Missing Information",
+          description: "Please provide both address and recovery phrase",
+          status: "error",
+          duration: 3000,
+          isClosable: true,
+          position: "bottom-right",
+        });
+        return;
+      }
+
+      try {
+        setIsConnecting(true);
+
+        // Validate and derive private key from recovery phrase
+        const words = recoveryPhrase.trim().split(" ");
+
+        if (words[0]?.toLowerCase() !== "wallet") {
+          throw new Error(
+            `Invalid recovery phrase. The first word should be 'wallet'. Got: ${words[0]}`
+          );
+        }
+
+        // Remove the first word "wallet"
+        const mnemonic = words.slice(1).join(" ");
+
+        if (mnemonic.split(" ").length !== 12) {
+          throw new Error(
+            "Invalid recovery phrase. Expected 12 words (excluding 'wallet')."
+          );
+        }
+
+        const recoveryOwnerAccount = mnemonicToAccount(mnemonic);
+        const privateKeyBytes = recoveryOwnerAccount.getHdKey().privateKey;
+        const ownerPrivateKey = bytesToHex(privateKeyBytes!);
+
+        connect({
+          connector: headlessCSWConnector({
+            address: cswAddress as `0x${string}`,
+            ownerIndex,
+            ownerPrivateKey: ownerPrivateKey as `0x${string}`,
+          }),
+        });
+      } catch (error) {
+        console.error("Connection error:", error);
+        toast({
+          title: "Connection Failed",
+          description: (error as Error).message,
+          status: "error",
+          duration: 5000,
+          isClosable: true,
+          position: "bottom-right",
+        });
+      } finally {
+        setIsConnecting(false);
+      }
+    };
+
+    return (
+      <Box
+        p={4}
+        borderWidth={1}
+        borderRadius="lg"
+        bg={formBg}
+        borderColor={borderColor}
+      >
+        <VStack spacing={4} align="stretch">
+          <Heading size="md">Connect Headless Smart Wallet</Heading>
+
+          <FormControl isRequired>
+            <FormLabel>Smart Wallet Address</FormLabel>
+            <Input
+              placeholder="0x..."
+              value={cswAddress}
+              onChange={(e) => setCswAddress(e.target.value)}
+            />
+            <FormHelperText>
+              The address of your Coinbase Smart Wallet
+            </FormHelperText>
+          </FormControl>
+
+          <FormControl isRequired>
+            <FormLabel>Recovery Phrase</FormLabel>
+            <Textarea
+              placeholder="wallet word1 word2 word3 ... word12"
+              value={recoveryPhrase}
+              onChange={(e) => setRecoveryPhrase(e.target.value)}
+              rows={3}
+            />
+            <FormHelperText>
+              Recovery phrase starting with 'wallet' followed by 12 words
+            </FormHelperText>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel>Owner Index</FormLabel>
+            <NumberInput
+              value={ownerIndex}
+              onChange={(_, value) => setOwnerIndex(value || 0)}
+              min={0}
+            >
+              <NumberInputField />
+              <NumberInputStepper>
+                <NumberIncrementStepper />
+                <NumberDecrementStepper />
+              </NumberInputStepper>
+            </NumberInput>
+            <FormHelperText>Index of the owner (default: 0)</FormHelperText>
+          </FormControl>
+
+          <Button
+            colorScheme="blue"
+            onClick={handleConnect}
+            isLoading={isConnecting}
+            loadingText="Connecting..."
+          >
+            Connect Wallet
+          </Button>
+        </VStack>
+      </Box>
+    );
+  };
+
   // Handle session request (like eth_sendTransaction)
   const handleSessionRequest = useCallback(
     async (approve: boolean) => {
@@ -103,6 +259,7 @@ export default function WalletBridgePage() {
         const { request } = params;
 
         if (approve) {
+          console.log("approving request", request);
           let result;
 
           setPendingRequest(true);
@@ -722,7 +879,16 @@ export default function WalletBridgePage() {
             gap={{ base: 4, lg: 0 }}
           >
             <Heading size={{ base: "xl", md: "xl" }}>💸 Wallet Bridge</Heading>
-            {isConnected && <ConnectButton />}
+            {isConnected && (
+              <Box textAlign="right">
+                <Text fontSize="sm" color="green.500" fontWeight="semibold">
+                  ✅ Wallet Connected
+                </Text>
+                <Text fontSize="xs" color="gray.500">
+                  {address?.slice(0, 6)}...{address?.slice(-4)}
+                </Text>
+              </Box>
+            )}
           </Flex>
 
           <AnimatedSubtitle />
@@ -755,7 +921,7 @@ export default function WalletBridgePage() {
                     <Text mb={{ base: 3, md: 4 }}>
                       Please connect your wallet to use WalletBridge
                     </Text>
-                    <ConnectButton />
+                    <HeadlessCSWForm />
                   </Box>
                 )}
 
