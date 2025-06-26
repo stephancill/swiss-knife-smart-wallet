@@ -9,7 +9,7 @@ import {
   http,
   numberToHex,
 } from "viem";
-import { toCoinbaseSmartAccount } from "viem/account-abstraction";
+import { createBundlerClient, entryPoint06Abi, entryPoint06Address, toCoinbaseSmartAccount } from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
 import { ChainNotConfiguredError, createConnector } from "wagmi";
 
@@ -126,10 +126,22 @@ export function headlessCSWConnector({
         address,
       });
 
+      const ownerWalletClient = createWalletClient({
+        account: ownerAccount,
+        chain,
+        transport,
+      });
+
       walletClient = createWalletClient({
         account,
         chain,
         transport,
+      });
+
+      const bundlerClient = createBundlerClient({
+        account,
+        client: publicClient,
+        transport: http(),
       });
 
       return {
@@ -139,9 +151,44 @@ export function headlessCSWConnector({
           if (args[0].method === "eth_sendTransaction") {
             console.log("custom handler! for eth_sendTransaction", args);
             const tx = args[0].params[0];
-            const result = await walletClient.sendTransaction(tx);
-            console.log({ result });
-            return result;
+
+            const userOp = await bundlerClient.prepareUserOperation({
+              calls: [
+                {
+                  to: tx.to,
+                  from: getAddress(account.address),
+                  data: tx.data,
+                  value: tx.value,
+                },
+              ],
+              maxFeePerGas: BigInt(0),
+              callGasLimit: BigInt(1_000_000),
+              preVerificationGas: BigInt(1_000_000),
+              verificationGasLimit: BigInt(1_000_000),
+              maxPriorityFeePerGas: BigInt(0),
+              initCode: "0x",
+            });
+
+            console.log('prepared user op', userOp);
+
+            const userOpSignature = await account.signUserOperation(userOp);
+
+            console.log('signed user op', userOpSignature);
+
+            const executeTx = await ownerWalletClient.writeContract({
+              abi: entryPoint06Abi,
+              address: entryPoint06Address,
+              functionName: "handleOps",
+              args: [
+                [{ ...userOp, initCode: "0x", signature: userOpSignature }],
+                ownerAccount.address,
+              ],
+            });
+
+            await publicClient.waitForTransactionReceipt({ hash: executeTx });
+
+            console.log({ executeTx });
+            return executeTx;
           }
 
           const result = await walletClient.request(...args);
