@@ -294,8 +294,12 @@ export default function WalletBridgePage() {
             request.method === "eth_signTypedData_v3" ||
             request.method === "eth_signTypedData_v4"
           ) {
+            let typedData = request.params[1];
+            try {
+              typedData = JSON.parse(request.params[1]);
+            } catch (e) {}
+
             // Handle typed data signing
-            const typedData = request.params[1]; // The typed data is usually the second parameter
             const signature = await walletClient.signTypedData({
               account: address as `0x${string}`,
               domain: typedData.domain,

@@ -9,7 +9,12 @@ import {
   http,
   numberToHex,
 } from "viem";
-import { createBundlerClient, entryPoint06Abi, entryPoint06Address, toCoinbaseSmartAccount } from "viem/account-abstraction";
+import {
+  createBundlerClient,
+  entryPoint06Abi,
+  entryPoint06Address,
+  toCoinbaseSmartAccount,
+} from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
 import { ChainNotConfiguredError, createConnector } from "wagmi";
 
@@ -150,6 +155,7 @@ export function headlessCSWConnector({
           console.log("request", args);
           if (args[0].method === "eth_sendTransaction") {
             console.log("custom handler! for eth_sendTransaction", args);
+            // @ts-ignore -- params is an array of unknown types
             const tx = args[0].params[0];
 
             const userOp = await bundlerClient.prepareUserOperation({
@@ -169,11 +175,11 @@ export function headlessCSWConnector({
               initCode: "0x",
             });
 
-            console.log('prepared user op', userOp);
+            console.log("prepared user op", userOp);
 
             const userOpSignature = await account.signUserOperation(userOp);
 
-            console.log('signed user op', userOpSignature);
+            console.log("signed user op", userOpSignature);
 
             const executeTx = await ownerWalletClient.writeContract({
               abi: entryPoint06Abi,
@@ -189,6 +195,17 @@ export function headlessCSWConnector({
 
             console.log({ executeTx });
             return executeTx;
+          } else if (args[0].method === "eth_signTypedData_v4") {
+            // @ts-ignore -- params is an array of unknown types
+            let typedData = args[0].params[1];
+            try {
+              typedData = JSON.parse(typedData);
+            } catch (e) {}
+
+            const signature = await walletClient.signTypedData({
+              ...typedData,
+            });
+            return signature;
           }
 
           const result = await walletClient.request(...args);
